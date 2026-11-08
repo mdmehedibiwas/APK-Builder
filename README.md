@@ -41,5 +41,4 @@ Open [release tags](https://github.com/Vauth/android-web/tags) to view generated
 
 <br>
 
-## Screenshot (youtube.com)
-<a href="#Screenshot"><img src="https://github.com/user-attachments/assets/195a5719-f697-4ff5-9c64-97a605e3637e" width="300px"></a>
+## 
