@@ -1,0 +1,166 @@
+name: Build WebView App
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'App Name (e.g., My Cool App)'
+        required: true
+        type: string
+      source_type:
+        description: 'Content source'
+        required: true
+        type: choice
+        options:
+          - url
+          - html
+        default: 'url'
+      website_url:
+        description: 'Website URL (required if source_type = url)'
+        required: false
+        type: string
+      html_path:
+        description: 'Path to HTML file already committed in this repo (required if source_type = html, e.g. uploads/index.html)'
+        required: false
+        type: string
+      app_icon_url:
+        description: 'Direct link to PNG/JPG icon (leave empty if using icon_path)'
+        required: false
+        type: string
+      icon_path:
+        description: 'Path to icon file already committed in this repo (leave empty if using app_icon_url)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build WebView APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Validate Inputs
+        run: |
+          if [ -z "${{ inputs.app_name }}" ]; then
+            echo "Error: App name is required"
+            exit 1
+          fi
+          if [ "${{ inputs.source_type }}" = "url" ] && [ -z "${{ inputs.website_url }}" ]; then
+            echo "Error: Website URL is required when source_type is url"
+            exit 1
+          fi
+          if [ "${{ inputs.source_type }}" = "html" ] && [ -z "${{ inputs.html_path }}" ]; then
+            echo "Error: html_path is required when source_type is html"
+            exit 1
+          fi
+          if [ -z "${{ inputs.app_icon_url }}" ] && [ -z "${{ inputs.icon_path }}" ]; then
+            echo "Error: Provide either app_icon_url or icon_path"
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Prepare Local HTML (if source_type = html)
+        if: ${{ inputs.source_type == 'html' }}
+        run: |
+          mkdir -p app/src/main/assets
+          cp "${{ inputs.html_path }}" app/src/main/assets/index.html
+          echo "HTML copied to assets/index.html"
+
+      - name: Download and Process App Icon
+        run: |
+          if [ -n "${{ inputs.icon_path }}" ]; then
+            cp "${{ inputs.icon_path }}" icon_original.png
+          else
+            curl -L -o icon_original.png "${{ inputs.app_icon_url }}"
+          fi
+
+          sudo apt-get update && sudo apt-get install -y imagemagick
+
+          convert icon_original.png -resize 48x48 app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon_original.png -resize 72x72 app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon_original.png -resize 96x96 app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert icon_original.png -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert icon_original.png -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+      - name: Configure App Settings
+        run: |
+          echo "APP_NAME=${{ inputs.app_name }}" > app/app.properties
+          echo "WEBSITE_URL=${{ inputs.website_url }}" >> app/app.properties
+          echo "SOURCE_TYPE=${{ inputs.source_type }}" >> app/app.properties
+
+          sed -i 's/android:label="[^"]*"/android:label="${{ inputs.app_name }}"/g' app/src/main/AndroidManifest.xml
+
+      - name: Create settings.gradle
+        run: |
+          SANITIZED_NAME=$(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr -cd '[:alnum:]_')
+          echo "pluginManagement {" > settings.gradle
+          echo "    repositories {" >> settings.gradle
+          echo "        google()" >> settings.gradle
+          echo "        mavenCentral()" >> settings.gradle
+          echo "        gradlePluginPortal()" >> settings.gradle
+          echo "    }" >> settings.gradle
+          echo "}" >> settings.gradle
+          echo "dependencyResolutionManagement {" >> settings.gradle
+          echo "    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)" >> settings.gradle
+          echo "    repositories {" >> settings.gradle
+          echo "        google()" >> settings.gradle
+          echo "        mavenCentral()" >> settings.gradle
+          echo "    }" >> settings.gradle
+          echo "}" >> settings.gradle
+          echo "rootProject.name = '${SANITIZED_NAME}'" >> settings.gradle
+          echo "include ':app'" >> settings.gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
+
+      - name: Build Debug APK
+        run: |
+          export APP_NAME="${{ inputs.app_name }}"
+          export WEBSITE_URL="${{ inputs.website_url }}"
+          if [ "${{ inputs.source_type }}" = "html" ]; then
+            export LOAD_LOCAL_HTML="true"
+          else
+            export LOAD_LOCAL_HTML="false"
+          fi
+          PACKAGE_SUFFIX=$(echo "${{ inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | head -c 20)
+          export PACKAGE_SUFFIX="${PACKAGE_SUFFIX}"
+          gradle :app:assembleDebug --no-daemon
+
+      - name: Prepare Release
+        id: prepare_release
+        run: |
+          TAG_NAME=$(echo "${{ inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd '[:alnum:]-' | head -c 50)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          TAG_NAME="${TAG_NAME}-${TIMESTAMP}"
+
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "release_name=${{ inputs.app_name }}" >> $GITHUB_OUTPUT
+
+          SAFE_NAME=$(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr -cd '[:alnum:]_')
+          cp app/build/outputs/apk/debug/app-debug.apk "${SAFE_NAME}.apk"
+          echo "apk_path=${SAFE_NAME}.apk" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.prepare_release.outputs.tag_name }}
+          name: ${{ steps.prepare_release.outputs.release_name }}
+          body: |
+            **App Name:** ${{ inputs.app_name }}
+            **Source:** ${{ inputs.source_type }}
+            **Website URL:** ${{ inputs.website_url }}
+          files: ${{ steps.prepare_release.outputs.apk_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
