@@ -4,163 +4,206 @@ on:
   workflow_dispatch:
     inputs:
       app_name:
-        description: 'App Name (e.g., My Cool App)'
+        description: 'App Name'
         required: true
+        type: string
+      package_name:
+        description: 'Package suffix (letters/numbers only, optional)'
+        required: false
+        type: string
+      version_name:
+        description: 'Version name (e.g. 1.0.0)'
+        required: false
+        type: string
+      version_code:
+        description: 'Version code (number)'
+        required: false
         type: string
       source_type:
         description: 'Content source'
         required: true
         type: choice
-        options:
-          - url
-          - html
+        options: [url, html, project]
         default: 'url'
       website_url:
-        description: 'Website URL (required if source_type = url)'
+        description: 'Website URL (if source_type = url)'
         required: false
         type: string
       html_path:
-        description: 'Path to HTML file already committed in this repo (required if source_type = html, e.g. uploads/index.html)'
+        description: 'Path to single HTML file in repo (if source_type = html)'
+        required: false
+        type: string
+      project_zip_path:
+        description: 'Path to project .zip in repo (if source_type = project, multi-file)'
         required: false
         type: string
       app_icon_url:
-        description: 'Direct link to PNG/JPG icon (leave empty if using icon_path)'
+        description: 'Icon URL (optional if icon_path given)'
         required: false
         type: string
       icon_path:
-        description: 'Path to icon file already committed in this repo (leave empty if using app_icon_url)'
+        description: 'Path to icon file in repo (optional if app_icon_url given)'
         required: false
         type: string
+      orientation:
+        description: 'Screen orientation'
+        required: false
+        type: choice
+        options: [unspecified, portrait, landscape]
+        default: 'unspecified'
+      fullscreen:
+        description: 'Fullscreen mode (hide status bar)'
+        required: false
+        type: boolean
+        default: false
+      statusbar_color:
+        description: 'Status bar color hex (e.g. 1F1F1F, no #)'
+        required: false
+        type: string
+      permissions:
+        description: 'Comma-separated permissions (CAMERA,RECORD_AUDIO,ACCESS_FINE_LOCATION,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE)'
+        required: false
+        type: string
+      build_type:
+        description: 'Output type'
+        required: true
+        type: choice
+        options: [apk, aab]
+        default: 'apk'
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build WebView APK
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Validate Inputs
         run: |
-          if [ -z "${{ inputs.app_name }}" ]; then
-            echo "Error: App name is required"
-            exit 1
-          fi
-          if [ "${{ inputs.source_type }}" = "url" ] && [ -z "${{ inputs.website_url }}" ]; then
-            echo "Error: Website URL is required when source_type is url"
-            exit 1
-          fi
-          if [ "${{ inputs.source_type }}" = "html" ] && [ -z "${{ inputs.html_path }}" ]; then
-            echo "Error: html_path is required when source_type is html"
-            exit 1
-          fi
-          if [ -z "${{ inputs.app_icon_url }}" ] && [ -z "${{ inputs.icon_path }}" ]; then
-            echo "Error: Provide either app_icon_url or icon_path"
-            exit 1
-          fi
+          [ -z "${{ inputs.app_name }}" ] && echo "App name required" && exit 1
+          if [ "${{ inputs.source_type }}" = "url" ] && [ -z "${{ inputs.website_url }}" ]; then echo "website_url required"; exit 1; fi
+          if [ "${{ inputs.source_type }}" = "html" ] && [ -z "${{ inputs.html_path }}" ]; then echo "html_path required"; exit 1; fi
+          if [ "${{ inputs.source_type }}" = "project" ] && [ -z "${{ inputs.project_zip_path }}" ]; then echo "project_zip_path required"; exit 1; fi
+          if [ -z "${{ inputs.app_icon_url }}" ] && [ -z "${{ inputs.icon_path }}" ]; then echo "icon required"; exit 1; fi
+          exit 0
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+      - uses: actions/setup-java@v4
+        with: { distribution: 'temurin', java-version: '17' }
 
-      - name: Prepare Local HTML (if source_type = html)
-        if: ${{ inputs.source_type == 'html' }}
+      - name: Prepare Content (html / project zip)
         run: |
           mkdir -p app/src/main/assets
-          cp "${{ inputs.html_path }}" app/src/main/assets/index.html
-          echo "HTML copied to assets/index.html"
+          if [ "${{ inputs.source_type }}" = "html" ]; then
+            cp "${{ inputs.html_path }}" app/src/main/assets/index.html
+          elif [ "${{ inputs.source_type }}" = "project" ]; then
+            sudo apt-get update -y && sudo apt-get install -y unzip
+            unzip -o "${{ inputs.project_zip_path }}" -d app/src/main/assets
+          fi
 
-      - name: Download and Process App Icon
+      - name: Process Icon
         run: |
           if [ -n "${{ inputs.icon_path }}" ]; then
             cp "${{ inputs.icon_path }}" icon_original.png
           else
             curl -L -o icon_original.png "${{ inputs.app_icon_url }}"
           fi
-
-          sudo apt-get update && sudo apt-get install -y imagemagick
-
-          convert icon_original.png -resize 48x48 app/src/main/res/mipmap-mdpi/ic_launcher.png
-          convert icon_original.png -resize 72x72 app/src/main/res/mipmap-hdpi/ic_launcher.png
-          convert icon_original.png -resize 96x96 app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          sudo apt-get install -y imagemagick
+          convert icon_original.png -resize 48x48   app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon_original.png -resize 72x72   app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon_original.png -resize 96x96   app/src/main/res/mipmap-xhdpi/ic_launcher.png
           convert icon_original.png -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert icon_original.png -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+      - name: Apply Manifest Settings (label, orientation, permissions)
+        run: |
+          python3 - <<'PYEOF'
+          import re
+          p = "app/src/main/AndroidManifest.xml"
+          xml = open(p).read()
+          xml = re.sub(r'android:label="[^"]*"', f'android:label="${{ inputs.app_name }}"', xml)
+
+          orient = "${{ inputs.orientation }}"
+          if orient and orient != "unspecified":
+              xml = xml.replace(
+                  'android:windowSoftInputMode="adjustResize">',
+                  f'android:windowSoftInputMode="adjustResize"\n            android:screenOrientation="{orient}">'
+              )
+
+          allowed = set(x.strip().upper() for x in "${{ inputs.permissions }}".split(",") if x.strip())
+          optional = ["CAMERA", "RECORD_AUDIO", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION",
+                      "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
+          for perm in optional:
+              if perm not in allowed:
+                  xml = re.sub(rf'\s*<uses-permission android:name="android\.permission\.{perm}"[^/]*/>', '', xml)
+
+          open(p, "w").write(xml)
+          PYEOF
+
+      - name: Apply Status Bar Color
+        if: ${{ inputs.statusbar_color != '' }}
+        run: |
+          sed -i 's/colorPrimaryDark">#[0-9A-Fa-f]*</colorPrimaryDark">#${{ inputs.statusbar_color }}</' app/src/main/res/values/colors.xml
 
       - name: Configure App Settings
         run: |
           echo "APP_NAME=${{ inputs.app_name }}" > app/app.properties
           echo "WEBSITE_URL=${{ inputs.website_url }}" >> app/app.properties
-          echo "SOURCE_TYPE=${{ inputs.source_type }}" >> app/app.properties
-
-          sed -i 's/android:label="[^"]*"/android:label="${{ inputs.app_name }}"/g' app/src/main/AndroidManifest.xml
 
       - name: Create settings.gradle
         run: |
           SANITIZED_NAME=$(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr -cd '[:alnum:]_')
-          echo "pluginManagement {" > settings.gradle
-          echo "    repositories {" >> settings.gradle
-          echo "        google()" >> settings.gradle
-          echo "        mavenCentral()" >> settings.gradle
-          echo "        gradlePluginPortal()" >> settings.gradle
-          echo "    }" >> settings.gradle
-          echo "}" >> settings.gradle
-          echo "dependencyResolutionManagement {" >> settings.gradle
-          echo "    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)" >> settings.gradle
-          echo "    repositories {" >> settings.gradle
-          echo "        google()" >> settings.gradle
-          echo "        mavenCentral()" >> settings.gradle
-          echo "    }" >> settings.gradle
-          echo "}" >> settings.gradle
-          echo "rootProject.name = '${SANITIZED_NAME}'" >> settings.gradle
-          echo "include ':app'" >> settings.gradle
+          cat > settings.gradle <<EOF
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = '${SANITIZED_NAME}'
+          include ':app'
+          EOF
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.4'
+      - uses: gradle/actions/setup-gradle@v3
+        with: { gradle-version: '8.4' }
 
-      - name: Build Debug APK
+      - name: Build
         run: |
           export APP_NAME="${{ inputs.app_name }}"
           export WEBSITE_URL="${{ inputs.website_url }}"
-          if [ "${{ inputs.source_type }}" = "html" ]; then
-            export LOAD_LOCAL_HTML="true"
-          else
-            export LOAD_LOCAL_HTML="false"
+          if [ "${{ inputs.source_type }}" = "url" ]; then export LOAD_LOCAL_HTML="false"; else export LOAD_LOCAL_HTML="true"; fi
+          PACKAGE_SUFFIX="${{ inputs.package_name }}"
+          if [ -z "$PACKAGE_SUFFIX" ]; then
+            PACKAGE_SUFFIX=$(echo "${{ inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | head -c 20)
           fi
-          PACKAGE_SUFFIX=$(echo "${{ inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | head -c 20)
-          export PACKAGE_SUFFIX="${PACKAGE_SUFFIX}"
-          gradle :app:assembleDebug --no-daemon
+          export PACKAGE_SUFFIX
+          export VERSION_NAME="${{ inputs.version_name }}"
+          export VERSION_CODE_IN="${{ inputs.version_code }}"
+          if [ "${{ inputs.build_type }}" = "aab" ]; then
+            gradle :app:bundleRelease --no-daemon
+          else
+            gradle :app:assembleDebug --no-daemon
+          fi
 
       - name: Prepare Release
-        id: prepare_release
+        id: prep
         run: |
-          TAG_NAME=$(echo "${{ inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd '[:alnum:]-' | head -c 50)
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          TAG_NAME="${TAG_NAME}-${TIMESTAMP}"
+          TAG="$(echo "${{ inputs.app_name }}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd '[:alnum:]-')-$(date +%Y%m%d-%H%M%S)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          SAFE=$(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr -cd '[:alnum:]_')
+          if [ "${{ inputs.build_type }}" = "aab" ]; then
+            cp app/build/outputs/bundle/release/app-release.aab "${SAFE}.aab"
+            echo "file=${SAFE}.aab" >> $GITHUB_OUTPUT
+          else
+            cp app/build/outputs/apk/debug/app-debug.apk "${SAFE}.apk"
+            echo "file=${SAFE}.apk" >> $GITHUB_OUTPUT
+          fi
 
-          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
-          echo "release_name=${{ inputs.app_name }}" >> $GITHUB_OUTPUT
-
-          SAFE_NAME=$(echo "${{ inputs.app_name }}" | tr ' ' '_' | tr -cd '[:alnum:]_')
-          cp app/build/outputs/apk/debug/app-debug.apk "${SAFE_NAME}.apk"
-          echo "apk_path=${SAFE_NAME}.apk" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.prepare_release.outputs.tag_name }}
-          name: ${{ steps.prepare_release.outputs.release_name }}
-          body: |
-            **App Name:** ${{ inputs.app_name }}
-            **Source:** ${{ inputs.source_type }}
-            **Website URL:** ${{ inputs.website_url }}
-          files: ${{ steps.prepare_release.outputs.apk_path }}
+          tag_name: ${{ steps.prep.outputs.tag }}
+          name: ${{ inputs.app_name }}
+          body: "Type: ${{ inputs.build_type }} | Source: ${{ inputs.source_type }}"
+          files: ${{ steps.prep.outputs.file }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
