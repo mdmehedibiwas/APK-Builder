@@ -480,4 +480,198 @@ class MainActivity : AppCompatActivity() {
                     Log.e(TAG, "Error showing file chooser", e)
                     filePathCallback?.onReceiveValue(null)
                     return false
- 
+                }
+            }
+            
+            // Handle geolocation permission
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String?,
+                callback: GeolocationPermissions.Callback?
+            ) {
+                try {
+                    geolocationOrigin = origin
+                    geolocationCallback = callback
+                    
+                    val permissions = arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                    
+                    if (hasPermissions(permissions)) {
+                        callback?.invoke(origin, true, false)
+                    } else {
+                        geolocationPermissionLauncher.launch(permissions)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error handling geolocation permission", e)
+                    callback?.invoke(origin, false, false)
+                }
+            }
+            
+            // Handle popups / new windows
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message?
+            ): Boolean {
+                try {
+                    if (resultMsg == null) {
+                        Log.w(TAG, "resultMsg is null in onCreateWindow")
+                        return false
+                    }
+                    
+                    val transport = resultMsg.obj as? WebView.WebViewTransport
+                    if (transport == null) {
+                        Log.w(TAG, "transport is null in onCreateWindow")
+                        return false
+                    }
+                    
+                    val newWebView = WebView(this@MainActivity)
+                    transport.webView = newWebView
+                    resultMsg.sendToTarget()
+                    
+                    newWebView.webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                            try {
+                                webView?.loadUrl(request?.url?.toString() ?: "")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error loading URL in popup", e)
+                            }
+                            return true
+                        }
+                    }
+                    return true
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error creating window", e)
+                    return false
+                }
+            }
+            
+            // Handle fullscreen video
+            private var customView: View? = null
+            private var customViewCallback: CustomViewCallback? = null
+            
+            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                try {
+                    customView = view
+                    customViewCallback = callback
+                    container?.addView(view)
+                    webView?.visibility = View.GONE
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error showing custom view", e)
+                }
+            }
+            
+            override fun onHideCustomView() {
+                try {
+                    container?.removeView(customView)
+                    webView?.visibility = View.VISIBLE
+                    customViewCallback?.onCustomViewHidden()
+                    customView = null
+                    customViewCallback = null
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error hiding custom view", e)
+                }
+            }
+            
+            // Handle permission requests (camera, microphone)
+            override fun onPermissionRequest(request: PermissionRequest?) {
+                try {
+                    request?.let { permRequest ->
+                        val permissions = mutableListOf<String>()
+                        
+                        permRequest.resources.forEach { resource ->
+                            when (resource) {
+                                PermissionRequest.RESOURCE_VIDEO_CAPTURE -> {
+                                    permissions.add(Manifest.permission.CAMERA)
+                                }
+                                PermissionRequest.RESOURCE_AUDIO_CAPTURE -> {
+                                    permissions.add(Manifest.permission.RECORD_AUDIO)
+                                }
+                            }
+                        }
+                        
+                        if (permissions.isEmpty()) {
+                            // No special permissions needed, grant the request
+                            permRequest.grant(permRequest.resources)
+                        } else if (hasPermissions(permissions.toTypedArray())) {
+                            // Already have permissions, grant the request
+                            permRequest.grant(permRequest.resources)
+                        } else {
+                            // Need to request permissions, store the request and wait for callback
+                            pendingPermissionRequest = permRequest
+                            mediaPermissionLauncher.launch(permissions.toTypedArray())
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error handling permission request", e)
+                    request?.deny()
+                }
+            }
+        }
+    }
+
+    private fun hasPermissions(permissions: Array<String>): Boolean {
+        return permissions.all { 
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED 
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!isDestroyed) {
+            try {
+                webView?.onResume()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in onResume", e)
+            }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (!isDestroyed) {
+            try {
+                webView?.onPause()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in onPause", e)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        isDestroyed = true
+        try {
+            // Clear callbacks to prevent memory leaks
+            fileUploadCallback?.onReceiveValue(null)
+            fileUploadCallback = null
+            geolocationCallback?.invoke(geolocationOrigin, false, false)
+            geolocationCallback = null
+            pendingPermissionRequest?.deny()
+            pendingPermissionRequest = null
+            
+            // Save cookies before cleanup
+            CookieManager.getInstance().flush()
+            
+            // Clean up WebView
+            webView?.let { wv ->
+                wv.loadUrl("about:blank")
+                wv.onPause()
+                wv.removeAllViews()
+                // Remove from parent last, right before destroy
+                container?.removeView(wv)
+                wv.destroy()
+            }
+            webView = null
+            progressBar = null
+            loadingOverlay = null
+            fabBack = null
+            fabForward = null
+            container = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onDestroy", e)
+        }
+        super.onDestroy()
+    }
+}
