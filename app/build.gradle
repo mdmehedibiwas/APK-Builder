@@ -3,8 +3,11 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// Read app configuration from environment or use defaults
 def websiteUrl = System.getenv("WEBSITE_URL") ?: "https://example.com"
 def appName = System.getenv("APP_NAME") ?: "WebView App"
+// Generate unique package suffix from app name
+// This creates a unique applicationId for each app to avoid conflicts when installing multiple apps
 def loadLocalHtml = System.getenv("LOAD_LOCAL_HTML") ?: "false"
 def packageSuffix = System.getenv("PACKAGE_SUFFIX") ?: appName.toLowerCase()
     .replaceAll(/[^a-z0-9]/, '')
@@ -12,20 +15,26 @@ def packageSuffix = System.getenv("PACKAGE_SUFFIX") ?: appName.toLowerCase()
 def uniqueAppId = "com.webviewapp.${packageSuffix}"
 
 android {
+    // Namespace is used for code generation and R class references (static)
     namespace 'com.vauth.webviewapp'
     compileSdk 36
 
     defaultConfig {
+        // ApplicationId is the unique identifier for the app in Android (dynamic per build)
         applicationId uniqueAppId
         minSdk 24
         targetSdk 36
-        versionCode ((System.currentTimeMillis() / 1000L) as int)
-        versionName "1.0." + new Date().format('yyyyMMdd.HHmm')
+        // Dynamic version code based on timestamp to avoid APK conflicts
+        // Using seconds since epoch to ensure each build has unique version
+        versionCode (System.getenv("VERSION_CODE_IN")?.isInteger() ? System.getenv("VERSION_CODE_IN").toInteger() : ((System.currentTimeMillis() / 1000L) as int))
+        versionName System.getenv("VERSION_NAME") ?: ("1.0." + new Date().format('yyyyMMdd.HHmm'))
         
+        // Pass website URL to the app via BuildConfig
         buildConfigField "String", "WEBSITE_URL", "\"${websiteUrl}\""
         buildConfigField "String", "GITHUB_URL", "\"https://github.com/vauth\""
         buildConfigField "boolean", "USE_LOCAL_HTML", loadLocalHtml
         
+        // Set app name
         resValue "string", "app_name", "" + appName
     }
 
